@@ -704,7 +704,7 @@ Resources:
               }];
               callback(null, response);
             };
-      Runtime: nodejs6.10
+      Runtime: nodejs10.x
 
 # LAMBDA@EDGE VERSION VERSION
   LambdaEdgeVersion:
@@ -740,7 +740,7 @@ Resources:
               return response.send(event, context, response.FAILED, e);
             });
           };
-      Runtime: nodejs6.10
+      Runtime: nodejs10.x
 
 
 Outputs:
