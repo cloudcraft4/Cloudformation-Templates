@@ -437,7 +437,7 @@ Resources:
       SubnetId:
         Fn::ImportValue: !Sub 'MyVPC-PublicSubnet1ID'
       BlockDeviceMappings:
-        - DeviceName: /dev/sda1
+        - DeviceName: /dev/xvda
           Ebs:
             VolumeSize: !Ref "BootVolSize"
             VolumeType: !Ref "BootVolType"
