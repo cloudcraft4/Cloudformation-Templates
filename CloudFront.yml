@@ -1,6 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'CI/CD optimized AWS CloudFormation Sample Template for AWS CloudFront Distribution with Custom Origin with an example of using the AWS Application Load Balancer (ALB) and a basic Amazon EC2 Instance.
-             AWS CloudFront Distribution is associated with Lambda@Edge for Security Headers inspection.
              In addition, AWS CloudFormation Template will provision an Examples of necessary IAM, S3, KMS and Security Groups resources.
              This template creates one Amazon EC2 instance and an Application Load Balancer, KMS Keys, S3 bucket, CloudFront Distribution resources.'
 
@@ -30,16 +29,6 @@ Parameters:
     Description:    The AWS Certificate Manager (ACM) certificate identifier.
     Type:           String
     Default:        "1234567890abcdefgh"
-
-  LambdaEventType:
-    Description:    Please specify the event type that triggers a Lambda function invocation.
-    Type:           String
-    Default:        "viewer-response"
-    AllowedValues:
-      - viewer-request
-      - origin-request
-      - origin-response
-      - viewer-response
 
   IPV6Enabled:
     Description:    Should CloudFront to respond to IPv6 DNS requests with an IPv6 address for your distribution.
@@ -287,11 +276,6 @@ Parameters:
     Type:           String
     Default:        "/health.html"
 
-  LambdaFunctionVersion:
-    Description:    AWS Lambda@Edge function version.
-    Type:           String
-    Default:        "1"
-
   LoggingBucketVersioning:
     Description:    The versioning state of an Amazon S3 bucket. If you enable versioning, you must suspend versioning to disable it.
     Type:           String
@@ -321,36 +305,6 @@ Resources:
               - sts:AssumeRole
       Path: '/'
 
-# IAM ROLE USED FOR LAMBDA EDGE
-  LambdaEdgeIAMRole:
-    Type: 'AWS::IAM::Role'
-    Description: "Lambda Edge IAM Role"
-    Properties:
-      RoleName: !Sub "${AppName}-iam-lambda-edge-role-${Environment}"
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowLambdaServiceToAssumeRole
-            Effect: Allow
-            Principal:
-              Service:
-                - edgelambda.amazonaws.com
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
-      Path: /
-      Policies:
-        - PolicyName: PublishNewLambdaEdgeVersion
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-            - Effect: Allow
-              Action:
-                - lambda:PublishVersion
-              Resource: '*'
 
 # KMS KEY USED FOR LOGGING S3 BUCKET
   LoggingBucketKMSKey:
@@ -606,7 +560,6 @@ Resources:
     Type: 'AWS::CloudFront::Distribution'
     DependsOn:
     - LoggingBucket
-    - LambdaEdgeFunction
     Properties:
       DistributionConfig:
         Comment: 'Cloudfront Distribution pointing ALB Origin'
@@ -648,9 +601,6 @@ Resources:
             Cookies:
               Forward: !Ref 'ForwardCookies'
           ViewerProtocolPolicy: !Ref 'ViewerProtocolPolicy'
-          LambdaFunctionAssociations:
-            - EventType: !Ref 'LambdaEventType'
-              LambdaFunctionARN: !Ref 'LambdaEdgeVersion'
         PriceClass: !Ref 'PriceClass'
         ViewerCertificate:
           AcmCertificateArn: !Sub 'arn:aws:acm:${AWS::Region}:${AWS::AccountId}:certificate/${ACMCertificateIdentifier}'
@@ -659,88 +609,6 @@ Resources:
         IPV6Enabled: !Ref 'IPV6Enabled'
         Logging:
           Bucket: !Sub '${LoggingBucket}.s3.amazonaws.com'
-
-# LAMBDA@EDGE FUNCTION
-  LambdaEdgeFunction:
-    Type: 'AWS::Lambda::Function'
-    Properties:
-      Description: !Sub 'A custom Lambda@Edge function for serving custom headers from CloudFront Distribution'
-      FunctionName: !Sub '${AppName}-lambda-edge-${Environment}'
-      Handler: index.handler
-      Role: !GetAtt 'LambdaEdgeIAMRole.Arn'
-      MemorySize: 128
-      Timeout: 5
-      Code:
-        ZipFile: !Sub |
-          'use strict';
-
-           exports.handler = (event, context, callback) => {
-              console.log('Adding additional headers to CloudFront response.');
-
-              const response = event.Records[0].cf.response;
-              response.headers['strict-transport-security'] = [{
-              key: 'Strict-Transport-Security',
-              value: 'max-age=86400; includeSubdomains; preload',
-              }];
-              response.headers['x-content-type-options'] = [{
-              key: 'X-Content-Type-Options',
-              value: 'nosniff',
-              }];
-              response.headers['x-frame-options'] = [{
-                  key:   'X-Frame-Options',
-                  value: "DENY"
-              }];
-              response.headers['content-security-policy'] = [{
-                  key:   'Content-Security-Policy',
-                  value: "default-src 'none'; img-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'"
-              }];
-              response.headers['x-xss-protection'] = [{
-                  key:   'X-XSS-Protection',
-                  value: "1; mode=block"
-              }];
-              response.headers['referrer-policy'] = [{
-                  key:   'Referrer-Policy',
-                  value: "same-origin"
-              }];
-              callback(null, response);
-            };
-      Runtime: nodejs10.x
-
-# LAMBDA@EDGE VERSION VERSION
-  LambdaEdgeVersion:
-    Type: 'Custom::LambdaVersion'
-    Properties:
-      ServiceToken: !GetAtt 'LambdaEdgeVersionFunction.Arn'
-      FunctionName: !Ref 'LambdaEdgeFunction'
-      LambdaCodeVersion: !Ref 'LambdaFunctionVersion'
-
-# LAMBDA@EDGE VERSION FUNCTION
-  LambdaEdgeVersionFunction:
-    Type: 'AWS::Lambda::Function'
-    Properties:
-      Description: !Sub 'A custom Lambda@Edge Version function'
-      FunctionName: !Sub '${AppName}-lambda-edge-version-${Environment}'
-      Handler: index.handler
-      Role: !GetAtt 'LambdaEdgeIAMRole.Arn'
-      MemorySize: 128
-      Timeout: 30
-      Code:
-        ZipFile: !Sub |
-          var AWS = require('aws-sdk');
-          var response = require('cfn-response');
-          exports.handler = (event, context) => {
-            console.log("Request received:\n", JSON.stringify(event));
-            if (event.RequestType == 'Delete') {
-              return response.send(event, context, response.SUCCESS);
-            }
-            var lambda = new AWS.Lambda();
-            lambda.publishVersion({FunctionName: event.ResourceProperties.FunctionName}).promise().then((data) => {
-              return response.send(event, context, response.SUCCESS, {Version: data.Version}, data.FunctionArn);
-            }).catch((e) => {
-              return response.send(event, context, response.FAILED, e);
-            });
-          };
-      Runtime: nodejs10.x
 
 
 Outputs:
@@ -808,19 +676,3 @@ Outputs:
   AlternateDomainNames:
     Description: "Alternate Domain Names (CNAME)"
     Value:       !Ref 'AlternateDomainNames'
-
-  LambdaEdgeFunction:
-    Description: "The Name of the Lambda@Edge Function"
-    Value:       !Sub 'LambdaEdgeFunction'
-    Export:
-      Name:      !Sub '${AppName}-${Environment}-lambda-edge-function-3'
-
-  LambdaEdgeFunctionARN:
-    Description: "The ARN of the Lambda@Edge Function"
-    Value:       !GetAtt 'LambdaEdgeFunction.Arn'
-    Export:
-      Name:      !Sub '${AppName}-${Environment}-lambda-edge-function-arn-3'
-
-  LambdaEdgeVersion:
-    Description: "Lambda@Edge Version Function"
-    Value:       !GetAtt 'LambdaEdgeVersion.Version'
